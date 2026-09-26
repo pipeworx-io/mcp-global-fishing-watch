@@ -3,7 +3,7 @@
   "name": "io.github.pipeworx-io/global-fishing-watch",
   "title": "Global Fishing Watch",
   "description": "Global Fishing Watch — AIS-derived fishing vessel identity, at-sea events (apparent fishing…",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://pipeworx.io/packs/global-fishing-watch",
   "repository": {
     "url": "https://github.com/pipeworx-io/mcp-global-fishing-watch",
