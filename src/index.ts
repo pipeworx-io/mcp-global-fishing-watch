@@ -688,6 +688,26 @@ function collapse(s: string): string {
  * Events paginate the other way (offset/limit/nextOffset), so the two endpoints
  * genuinely differ — do not unify them. Each tool below now names the live call
  * that proved it.
+ *
+ * VENDOR UPDATE 2026-10-21 (fleet #2685): GFW emailed developer@mojibake.ai
+ * 2026-10-02 announcing "updated models and spatial data" effective 2026-10-21.
+ * Checked live 2026-10-04 (GFW's own key-concepts doc + a live vessels/search
+ * call): every dataset this pack requests is pinned to the `:latest` alias
+ * (never a concrete version string), and GFW resolves that alias SERVER-SIDE
+ * -- `:latest` has pointed at v4.0 since 2026-02-25 per their docs, with no
+ * action needed on our side to track a version bump. vessels/search already
+ * echoes the resolved version per entry (`"dataset":"public-global-vessel-
+ * identity:v4.0"`, confirmed live); /v3/events and /4wings/report do not echo
+ * a resolved version anywhere in their response, only accept what we request.
+ * So "bump the version we request" is a no-op (we never pin one), and the
+ * actionable half of the vendor's instruction is recording what we DO know:
+ * each tool below now returns `dataset_version` -- the vendor-resolved string
+ * when GFW gives us one, the alias we requested when it does not. If the
+ * Oct 21 release changes RESPONSE SHAPE (new/renamed fields) rather than just
+ * refreshing the underlying model, that is a second, separate fix this
+ * comment does not cover -- the summarise* functions below already degrade to
+ * `null` per missing field rather than throwing, so a shape change would show
+ * up as more nulls, not a hard failure. Re-probe after 10-21.
  */
 
 
@@ -787,14 +807,23 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       for (const [i, ds] of datasetList(args.datasets, 'public-global-vessel-identity:latest').entries()) {
         p.append(`datasets[${i}]`, ds);
       }
+      const requestedDataset = datasetList(args.datasets, 'public-global-vessel-identity:latest')[0]
+        ?? 'public-global-vessel-identity:latest';
       const body = (await getJson(`${BASE}/vessels/search?${p}`, key)) as VesselSearchResponse;
       const entries = Array.isArray(body.entries) ? body.entries : [];
+      // GFW resolves `:latest` server-side and echoes the concrete version it
+      // actually served on every vessel row (e.g. "...identity:v4.0") -- surface
+      // that at the top level rather than just the alias we requested, so a
+      // caller (or the next vendor-change audit) can see which model version
+      // answered without digging into individual vessel rows.
+      const resolvedDataset = entries.map((v) => v.dataset).find((d): d is string => typeof d === 'string' && d.length > 0);
       return {
         query: q,
         total: body.total ?? entries.length,
         returned: entries.length,
         next_since: body.since ?? null,
         did_you_mean: body.metadata?.didYouMean ?? null,
+        dataset_version: resolvedDataset ?? requestedDataset,
         vessels: entries.map(summariseVessel),
         source: 'Global Fishing Watch API v3 vessel identity (gateway.api.globalfishingwatch.org)',
         licence: 'Global Fishing Watch data is free for non-commercial use; commercial use needs their permission.',
@@ -823,6 +852,12 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return {
         event_type: type,
         dataset,
+        // /v3/events never echoes a resolved version anywhere in its response
+        // (unlike /v3/vessels/search) -- this is the alias we asked for, not a
+        // vendor-confirmed resolution. Named separately from `dataset` above
+        // only so all three GFW tools share one consistent field a caller can
+        // read without branching per tool.
+        dataset_version: dataset,
         start_date: start,
         end_date: end,
         vessel_id: typeof args.vessel_id === 'string' ? args.vessel_id : null,
@@ -846,7 +881,8 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       p.set('group-by', groupBy);
       p.set('date-range', `${start},${end}`);
       p.set('format', 'JSON');
-      for (const [i, ds] of datasetList(args.datasets, 'public-global-fishing-effort:latest').entries()) {
+      const effortDatasets = datasetList(args.datasets, 'public-global-fishing-effort:latest');
+      for (const [i, ds] of effortDatasets.entries()) {
         p.append(`datasets[${i}]`, ds);
       }
       for (const [i, f] of listArg(args.filters).entries()) p.append(`filters[${i}]`, f);
@@ -908,6 +944,9 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
         group_by: groupBy,
         temporal_resolution: temporal,
         spatial_resolution: spatial,
+        // Same caveat as gfwfish_events: /4wings/report never echoes a
+        // resolved version in its response, so this is what we requested.
+        dataset_version: effortDatasets.join(','),
         row_count: rows.length,
         rows,
         source: 'Global Fishing Watch API v3 apparent fishing effort (gateway.api.globalfishingwatch.org)',
